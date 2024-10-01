@@ -8,6 +8,9 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -23,44 +26,35 @@ type S3Service struct {
 	bucket   string
 }
 
-// Function to initialize Cloudflare R2 service
 func NewR2Service() (*S3Service, error) {
 	account := os.Getenv("CLOUDFLARE_ACCOUNT_ID")
 	accessKey := os.Getenv("CLOUDFLARE_ACCESS_KEY_ID")
-	secretKey := os.Getenv("CLOUDFLARE_SECRET_ACCESS_KEY")
+	secretKey := os.Getenv("CLOUDFLARE_ACCESS_KEY_SECRET")
 	bucket := os.Getenv("CLOUDFLARE_BUCKET_NAME")
 
 	if account == "" || accessKey == "" || secretKey == "" || bucket == "" {
 		return nil, fmt.Errorf("missing required environment variables")
 	}
 
-	// Create custom resolver for R2 endpoint
-	r2Resolver := aws.EndpointResolverWithOptionsFunc(func(service, region string, options ...interface{}) (aws.Endpoint, error) {
-		return aws.Endpoint{
-			URL: fmt.Sprintf("https://%s.r2.cloudflarestorage.com", account),
-		}, nil
-	})
-
-	// Load AWS config with custom resolver
 	cfg, err := config.LoadDefaultConfig(context.TODO(),
-		config.WithEndpointResolverWithOptions(r2Resolver),
 		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKey, secretKey, "")),
-		config.WithRegion("auto"), // Use 'auto' instead of 'apac' for R2
+		config.WithRegion("auto"),
 	)
+
 	if err != nil {
-		return nil, err
+		log.Fatal(err)
 	}
 
-	// Create a new S3 client
-	s3Client := s3.NewFromConfig(cfg)
+	client := s3.NewFromConfig(cfg, func(o *s3.Options) {
+		o.BaseEndpoint = aws.String(fmt.Sprintf("https://%s.r2.cloudflarestorage.com", account))
+	})
 
 	return &S3Service{
-		s3Client: s3Client,
+		s3Client: client,
 		bucket:   bucket,
 	}, nil
 }
 
-// Function to upload file to Cloudflare R2 Storage
 func (s *S3Service) UploadFileToR2(ctx context.Context, key string, file []byte, contentType string) error {
 	input := &s3.PutObjectInput{
 		Bucket:      aws.String(s.bucket),
@@ -69,12 +63,10 @@ func (s *S3Service) UploadFileToR2(ctx context.Context, key string, file []byte,
 		ContentType: aws.String(contentType),
 	}
 
-	// Upload the file
 	_, err := s.s3Client.PutObject(ctx, input)
 	return err
 }
 
-// Function to download file from Cloudflare R2 Storage
 func (s *S3Service) GetFileFromR2(ctx context.Context, key string) ([]byte, string, error) {
 	input := &s3.GetObjectInput{
 		Bucket: aws.String(s.bucket),
@@ -97,27 +89,29 @@ func (s *S3Service) GetFileFromR2(ctx context.Context, key string) ([]byte, stri
 }
 
 func main() {
-	// Load .env file
 	err := godotenv.Load()
 	if err != nil {
 		log.Fatalf("Error loading .env file")
 	}
 
-	// Initialize the Cloudflare R2 service
 	s3Service, err := NewR2Service()
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("Error initializing R2 service: %v", err)
 	}
 
-	// Initialize Fiber
 	app := fiber.New()
 	app.Use(logger.New())
 
-	// Endpoint to upload files
 	app.Post("/upload", func(c *fiber.Ctx) error {
 		fileHeader, err := c.FormFile("file")
 		if err != nil {
 			return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "File is required"})
+		}
+
+		// Check if the file is an image
+		contentType := fileHeader.Header.Get("Content-Type")
+		if !strings.HasPrefix(contentType, "image/") {
+			return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "Only image files are allowed"})
 		}
 
 		file, err := fileHeader.Open()
@@ -132,17 +126,21 @@ func main() {
 			return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to read file"})
 		}
 
+		ext := filepath.Ext(fileHeader.Filename)
+		name := strings.TrimSuffix(fileHeader.Filename, ext)
+		hash := fmt.Sprintf("%x", time.Now().UnixNano())[8:]
+		filename := fmt.Sprintf("%s-%s%s", name, hash, ext)
+
 		ctx := context.TODO()
-		err = s3Service.UploadFileToR2(ctx, fileHeader.Filename, buf.Bytes(), fileHeader.Header.Get("Content-Type"))
+		err = s3Service.UploadFileToR2(ctx, filename, buf.Bytes(), contentType)
 		if err != nil {
 			return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to upload file"})
 		}
 
-		return c.JSON(fiber.Map{"message": "File uploaded successfully"})
+		return c.JSON(fiber.Map{"message": "Image uploaded successfully", "filename": filename})
 	})
 
-	// Endpoint to serve files
-	app.Get("/files/:key", func(c *fiber.Ctx) error {
+	app.Get("/:key", func(c *fiber.Ctx) error {
 		key := c.Params("key")
 
 		ctx := context.TODO()
@@ -155,5 +153,5 @@ func main() {
 		return c.Send(file)
 	})
 
-	log.Fatal(app.Listen(":3000"))
+	log.Fatal(app.Listen(":8081"))
 }
