@@ -42,11 +42,11 @@ export default {
 		}
 
 		const url = new URL(request.url);
-		const key = url.pathname.slice(1);
+		let key = url.pathname.substring(5);
 
 		switch (request.method) {
 			case 'POST':
-				if (url.pathname === '/upload') {
+				if (url.pathname === '/img/upload') {
 					return handleUpload(request, env);
 				}
 				return new Response('Not Found', { status: 404 });
