@@ -17,6 +17,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/joho/godotenv"
 )
@@ -100,6 +101,14 @@ func main() {
 	}
 
 	app := fiber.New()
+
+	// CORS middleware with whitelist
+	app.Use(cors.New(cors.Config{
+		AllowOrigins: os.Getenv("FRONTEND_URL"),
+		AllowMethods: "GET,POST,OPTIONS",     // Ensure OPTIONS method is allowed for preflight
+		AllowHeaders: "Content-Type, Accept", // Add necessary headers
+	}))
+
 	app.Use(logger.New())
 
 	app.Post("/upload", func(c *fiber.Ctx) error {
