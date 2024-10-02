@@ -24,7 +24,7 @@ export default function App() {
       formData.append("file", file);
 
       try {
-        const response = await fetch("http://localhost:8081/upload", {
+        const response = await fetch(`${import.meta.env.VITE_API_URL}/upload`, {
           method: "POST",
           body: formData,
         });
@@ -34,7 +34,7 @@ export default function App() {
         }
 
         const data = await response.json();
-        const fullImageUrl = `http://localhost:8081/${data.filename}`;
+        const fullImageUrl = `${import.meta.env.VITE_API_URL}/${data.filename}`;
         setImageUrl(fullImageUrl);
         toast.success(data.message);
       } catch (err) {
